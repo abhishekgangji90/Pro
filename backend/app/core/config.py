@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     
     GEMINI_API_KEY: str | None = None
     
-    ALLOW_CORS_ORIGINS: Union[List[str], str] = ["http://localhost:5173", "http://localhost:3000", "*"]
+    ALLOW_CORS_ORIGINS: Union[List[str], str] = ["http://localhost:5173", "http://localhost:3000", "https://pro-three-beige.vercel.app"]
 
     @field_validator("ALLOW_CORS_ORIGINS", mode="before")
     @classmethod
