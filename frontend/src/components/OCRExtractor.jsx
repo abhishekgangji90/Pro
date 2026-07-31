@@ -1,0 +1,153 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { Camera, RefreshCw, AlertTriangle, ShieldCheck, FileText, ScanText, Clock, PackageCheck } from 'lucide-react';
+import { extractOCRImage, getOCRHistory } from '../services/api';
+
+export default function OCRExtractor() {
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [error, setError] = useState(null);
+  
+  const fileInputRef = useRef(null);
+
+  const fetchHistory = async () => {
+    try {
+      setLoading(true);
+      const data = await getOCRHistory();
+      setHistory(data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setAnalyzing(true);
+    setError(null);
+    try {
+      const result = await extractOCRImage(file);
+      setHistory((prev) => [result, ...prev]);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to extract text from image.');
+    } finally {
+      setAnalyzing(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const getCategoryStyles = (category) => {
+    switch (category) {
+      case 'Safe':
+        return 'bg-emerald-950/40 border-emerald-800 text-emerald-400';
+      case 'Near Expiry':
+        return 'bg-yellow-950/40 border-yellow-800 text-yellow-400';
+      case 'Expired':
+        return 'bg-red-950/40 border-red-800 text-red-400';
+      default:
+        return 'bg-slate-900 border-slate-700 text-slate-300';
+    }
+  };
+
+  const getCategoryIcon = (category) => {
+    switch (category) {
+      case 'Safe': return <ShieldCheck className="w-5 h-5" />;
+      case 'Near Expiry': return <Clock className="w-5 h-5" />;
+      case 'Expired': return <AlertTriangle className="w-5 h-5" />;
+      default: return <FileText className="w-5 h-5" />;
+    }
+  };
+
+  return (
+    <div className="glass-panel rounded-2xl p-6 border border-slate-800 mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+            <ScanText className="w-6 h-6 text-kirana-400" />
+            OCR Product Scanner
+          </h2>
+          <p className="text-sm text-slate-400 mt-1">Extract dates and MRP automatically using AI</p>
+        </div>
+        
+        <div>
+          <input 
+            type="file" 
+            accept="image/*" 
+            capture="environment" 
+            className="hidden" 
+            ref={fileInputRef}
+            onChange={handleImageUpload}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={analyzing}
+            className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-kirana-600 to-emerald-500 hover:from-kirana-500 hover:to-emerald-400 text-white rounded-xl text-sm font-bold shadow-lg disabled:opacity-50 transition-all w-full sm:w-auto justify-center"
+          >
+            {analyzing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
+            <span>{analyzing ? 'Extracting Data...' : 'Scan Label'}</span>
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="mb-6 p-3 rounded-xl bg-red-950/60 border border-red-800/60 text-red-300 text-xs flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <RefreshCw className="w-8 h-8 text-kirana-500 animate-spin" />
+        </div>
+      ) : history.length === 0 ? (
+        <div className="text-center py-10 bg-slate-900/30 rounded-xl border border-dashed border-slate-700">
+          <ScanText className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+          <h3 className="text-slate-300 font-medium">No OCR Scans Yet</h3>
+          <p className="text-sm text-slate-500 mt-1">Scan a product label with MRP and Expiry Date.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {history.map((item, idx) => (
+            <div key={item.id || idx} className={`p-4 rounded-xl border flex flex-col justify-between ${getCategoryStyles(item.category)}`}>
+              <div>
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center space-x-2">
+                    {getCategoryIcon(item.category)}
+                    <span className="font-bold text-sm uppercase tracking-wider">{item.category}</span>
+                  </div>
+                  {item.days_remaining !== null && (
+                    <span className="text-xs font-bold px-2 py-1 bg-black/20 rounded-lg">
+                      {item.days_remaining} Days Left
+                    </span>
+                  )}
+                </div>
+                
+                <h4 className="text-lg font-bold text-white mb-2 line-clamp-1">{item.product_name || 'Unknown Product'}</h4>
+                
+                <div className="space-y-1 text-sm text-slate-300">
+                  {item.mrp && <div className="flex justify-between"><span>MRP:</span> <span className="font-medium text-white">₹{item.mrp}</span></div>}
+                  {item.batch_number && <div className="flex justify-between"><span>Batch:</span> <span className="font-medium text-white">{item.batch_number}</span></div>}
+                  {item.mfg_date && <div className="flex justify-between"><span>Mfg:</span> <span className="font-medium text-white">{item.mfg_date}</span></div>}
+                  {item.expiry_date && <div className="flex justify-between"><span>Exp:</span> <span className="font-medium text-white">{item.expiry_date}</span></div>}
+                </div>
+              </div>
+              <div className="mt-4 pt-3 border-t border-black/10 text-[10px] text-right opacity-70">
+                {new Date(item.created_at).toLocaleString()}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
