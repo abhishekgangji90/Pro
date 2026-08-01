@@ -113,7 +113,7 @@ class DatabaseManager:
         try:
             self.client = AsyncIOMotorClient(
                 settings.MONGODB_URL,
-                serverSelectionTimeoutMS=2000
+                serverSelectionTimeoutMS=10000
             )
             # Ping test
             await self.client.admin.command('ping')
