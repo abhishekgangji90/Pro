@@ -58,22 +58,66 @@ async def extract_ocr(
     if not settings.GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured on server")
         
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded image file is empty.")
+        
+    mime_type = file.content_type or "image/jpeg"
+    if mime_type == "application/octet-stream" or not mime_type.startswith("image/"):
+        mime_type = "image/jpeg"
+
+    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    data = {}
+
+    # Method 1: Direct Gemini Vision AI Extraction (Primary & Highly Accurate)
     try:
-        # Read file bytes
-        image_bytes = await file.read()
+        image_part = types.Part.from_bytes(
+            data=image_bytes,
+            mime_type=mime_type
+        )
         
-        # 1. Run EasyOCR
-        r = get_ocr_reader()
-        # EasyOCR needs bytes or path
-        ocr_results = r.readtext(image_bytes, detail=0)
-        raw_text = "\n".join(ocr_results)
-        
-        # 2. Ask Gemini to structure the raw text
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        
-        prompt = f"""
-You are an expert data extractor. I have used OCR to extract text from a product packaging image.
-The OCR text is messy. Your job is to extract the following fields and return ONLY a valid JSON object.
+        prompt = """You are an expert OCR product scanner and data extractor.
+Analyze this product packaging image directly and extract text details.
+
+Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
+{
+  "product_name": "Product Name or description (string or null)",
+  "batch_number": "Batch/Lot number (string or null)",
+  "mrp": 123.45 (numeric float or null),
+  "mfg_date": "YYYY-MM-DD or null",
+  "expiry_date": "YYYY-MM-DD or null"
+}
+"""
+        response = None
+        for model_name in ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-flash-latest']:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[prompt, image_part]
+                )
+                if response and response.text:
+                    break
+            except Exception:
+                continue
+
+        if response and response.text:
+            text = response.text.strip()
+            json_match = re.search(r'\{.*\}', text, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group(0))
+    except Exception as vision_err:
+        print(f"Gemini Vision error: {vision_err}")
+
+    # Method 2: EasyOCR Fallback if Gemini Vision direct image read did not return valid dict
+    if not data or not isinstance(data, dict) or not any(data.values()):
+        try:
+            r = get_ocr_reader()
+            ocr_results = r.readtext(image_bytes, detail=0)
+            raw_text = "\n".join(ocr_results)
+            
+            if raw_text.strip():
+                text_prompt = f"""
+You are an expert data extractor. Extract details from this OCR text and return ONLY a valid JSON object.
 
 Extract:
 - "product_name" (string or null)
@@ -85,25 +129,36 @@ Extract:
 Raw OCR Text:
 {raw_text}
 """
-        response = client.models.generate_content(
-            model='gemini-flash-latest',
-            contents=[prompt]
-        )
-        
-        text = response.text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.endswith("```"):
-            text = text[:-3]
-            
-        data = json.loads(text)
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to process OCR: {str(e)}")
-        
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[text_prompt]
+                )
+                if response and response.text:
+                    text = response.text.strip()
+                    json_match = re.search(r'\{.*\}', text, re.DOTALL)
+                    if json_match:
+                        data = json.loads(json_match.group(0))
+        except Exception as ocr_err:
+            print(f"EasyOCR fallback error: {ocr_err}")
+
+    if not isinstance(data, dict):
+        data = {}
+
+    product_name = data.get("product_name")
+    batch_number = data.get("batch_number")
+    mrp = data.get("mrp")
+    if mrp is not None:
+        try:
+            mrp = float(mrp)
+        except (ValueError, TypeError):
+            mrp = None
+
+    mfg_date = data.get("mfg_date")
+    expiry_date = data.get("expiry_date")
+
     # Calculate days remaining and category
-    days_remaining, category = calculate_expiry(data.get("expiry_date"))
-    
+    days_remaining, category = calculate_expiry(expiry_date)
+
     # Save to database
     db = get_database()
     col = db["ocr_results"]
@@ -111,11 +166,11 @@ Raw OCR Text:
     now = datetime.utcnow().isoformat()
     doc = {
         "store_id": current_user.store_id,
-        "product_name": data.get("product_name"),
-        "batch_number": data.get("batch_number"),
-        "mrp": data.get("mrp"),
-        "mfg_date": data.get("mfg_date"),
-        "expiry_date": data.get("expiry_date"),
+        "product_name": product_name or "Scanned Item",
+        "batch_number": batch_number,
+        "mrp": mrp,
+        "mfg_date": mfg_date,
+        "expiry_date": expiry_date,
         "days_remaining": days_remaining,
         "category": category,
         "created_at": now
