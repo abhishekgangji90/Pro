@@ -4,6 +4,7 @@ import json
 import io
 import re
 from PIL import Image
+from dateutil import parser as date_parser
 from google import genai
 from google.genai import types
 
@@ -14,6 +15,50 @@ from app.api.v1.endpoints.auth import get_current_user
 
 router = APIRouter()
 
+def parse_any_date(date_str: str) -> tuple[datetime | None, str | None]:
+    """
+    Parses date_str in multiple common Indian/global date formats.
+    Returns (datetime_object, formatted_YYYY_MM_DD_string).
+    """
+    if not date_str or not isinstance(date_str, str):
+        return None, None
+        
+    date_str = date_str.strip()
+    
+    try:
+        # 1. YYYY-MM-DD
+        match_iso = re.search(r'(\d{4})[/\.-](\d{1,2})[/\.-](\d{1,2})', date_str)
+        if match_iso:
+            y, m, d = int(match_iso.group(1)), int(match_iso.group(2)), int(match_iso.group(3))
+            if 1 <= m <= 12 and 1 <= d <= 31:
+                dt = datetime(y, m, d)
+                return dt, dt.strftime("%Y-%m-%d")
+
+        # 2. DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+        match_dmY = re.search(r'(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', date_str)
+        if match_dmY:
+            d, m, y = int(match_dmY.group(1)), int(match_dmY.group(2)), int(match_dmY.group(3))
+            if 1 <= m <= 12 and 1 <= d <= 31:
+                dt = datetime(y, m, d)
+                return dt, dt.strftime("%Y-%m-%d")
+
+        # 3. MM/YY or MM/YYYY
+        match_my = re.search(r'(\d{1,2})[/\.-](\d{2,4})', date_str)
+        if match_my:
+            m, y = int(match_my.group(1)), int(match_my.group(2))
+            if y < 100:
+                y += 2000
+            if 1 <= m <= 12:
+                # Default to end of month for expiry date estimation
+                dt = datetime(y, m, 28)
+                return dt, dt.strftime("%Y-%m-%d")
+
+        # 4. Fallback: Fuzzy parse with dateutil
+        dt = date_parser.parse(date_str, fuzzy=True)
+        return dt, dt.strftime("%Y-%m-%d")
+    except Exception:
+        return None, date_str
+
 def calculate_expiry(expiry_date_str: str):
     """
     Tries to parse expiry_date_str and calculate days remaining.
@@ -22,21 +67,16 @@ def calculate_expiry(expiry_date_str: str):
     if not expiry_date_str:
         return None, "Safe"
         
-    try:
-        match = re.search(r'\d{4}-\d{2}-\d{2}', expiry_date_str)
-        if match:
-            exp_date = datetime.strptime(match.group(), "%Y-%m-%d")
-            delta = (exp_date - datetime.utcnow()).days
+    dt, _ = parse_any_date(expiry_date_str)
+    if dt:
+        delta = (dt - datetime.utcnow()).days
+        if delta < 0:
+            return delta, "Expired"
+        elif delta <= 30:
+            return delta, "Near Expiry"
+        else:
+            return delta, "Safe"
             
-            if delta < 0:
-                return delta, "Expired"
-            elif delta <= 30:
-                return delta, "Near Expiry"
-            else:
-                return delta, "Safe"
-    except Exception:
-        pass
-        
     return None, "Safe"
 
 def compress_image_bytes(image_bytes: bytes, max_dim: int = 1280) -> tuple[bytes, str]:
@@ -82,14 +122,22 @@ async def extract_ocr(
             mime_type=mime_type
         )
         
-        prompt = """You are an expert OCR product scanner and data extractor for retail stores.
-Analyze this product packaging image directly and extract label details.
+        prompt = """You are an expert OCR product scanner for retail products and packaging.
+Analyze this product packaging image carefully and extract all product details.
+
+IMPORTANT DATE EXTRACTION RULES:
+1. "mfg_date": Look for "MFG DATE", "PKD", "PACKED ON", or "MANUFACTURED DATE". Format as YYYY-MM-DD (e.g. "2026-01-15").
+2. "expiry_date": Look for "EXP DATE", "EXPIRY DATE", "USE BY", "BEST BEFORE".
+   - If an explicit Expiry/Use By Date is printed, return it formatted as YYYY-MM-DD.
+   - If the label says "Best before X months from MFG / PKD", calculate the actual expiry date by adding X months to mfg_date (e.g. Mfg 2026-01-15 + 6 months = 2026-07-15).
+   - If only Month/Year is printed (e.g. "EXP 07/26"), format it as YYYY-MM-DD (e.g. "2026-07-31").
+   - Do NOT confuse Mfg Date with Expiry Date! Ensure expiry_date is AFTER mfg_date.
 
 Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
 {
-  "product_name": "Product Name or description (string or null)",
-  "batch_number": "Batch/Lot number (string or null)",
-  "mrp": 123.45 (numeric float or null),
+  "product_name": "Full Product Name with weight/brand (string or null)",
+  "batch_number": "Batch / Lot / B.No (string or null)",
+  "mrp": 123.45 (numeric MRP/Price in Rupees as float or null),
   "mfg_date": "YYYY-MM-DD or null",
   "expiry_date": "YYYY-MM-DD or null"
 }
@@ -126,8 +174,14 @@ Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
         except (ValueError, TypeError):
             mrp = None
 
-    mfg_date = data.get("mfg_date")
-    expiry_date = data.get("expiry_date")
+    raw_mfg = data.get("mfg_date")
+    raw_exp = data.get("expiry_date")
+
+    _, formatted_mfg = parse_any_date(raw_mfg)
+    _, formatted_exp = parse_any_date(raw_exp)
+
+    mfg_date = formatted_mfg or raw_mfg
+    expiry_date = formatted_exp or raw_exp
 
     # Calculate days remaining and category
     days_remaining, category = calculate_expiry(expiry_date)
