@@ -134,11 +134,11 @@ export default function OCRExtractor() {
                 
                 <h4 className="text-lg font-bold text-white mb-2 line-clamp-1">{item.product_name || 'Unknown Product'}</h4>
                 
-                <div className="space-y-1 text-sm text-slate-300">
-                  {item.mrp && <div className="flex justify-between"><span>MRP:</span> <span className="font-medium text-white">₹{item.mrp}</span></div>}
-                  {item.batch_number && <div className="flex justify-between"><span>Batch:</span> <span className="font-medium text-white">{item.batch_number}</span></div>}
-                  {item.mfg_date && <div className="flex justify-between"><span>Mfg:</span> <span className="font-medium text-white">{item.mfg_date}</span></div>}
-                  {item.expiry_date && <div className="flex justify-between"><span>Exp:</span> <span className="font-medium text-white">{item.expiry_date}</span></div>}
+                <div className="space-y-1.5 text-sm text-slate-300">
+                  <div className="flex justify-between"><span>MRP:</span> <span className="font-medium text-white">{item.mrp ? `₹${item.mrp}` : 'N/A'}</span></div>
+                  <div className="flex justify-between"><span>Batch:</span> <span className="font-medium text-white">{item.batch_number || 'N/A'}</span></div>
+                  <div className="flex justify-between"><span>Mfg Date:</span> <span className="font-medium text-white">{item.mfg_date || 'Not Specified'}</span></div>
+                  <div className="flex justify-between"><span>Expiry Date:</span> <span className="font-medium text-white">{item.expiry_date || 'Not Specified'}</span></div>
                 </div>
               </div>
               <div className="mt-4 pt-3 border-t border-black/10 text-[10px] text-right opacity-70">

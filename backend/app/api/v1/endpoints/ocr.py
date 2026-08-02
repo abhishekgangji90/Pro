@@ -19,6 +19,13 @@ from app.api.v1.endpoints.auth import get_current_user
 
 router = APIRouter()
 
+MONTH_MAP = {
+    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+    'january': 1, 'february': 2, 'march': 3, 'april': 4, 'june': 6,
+    'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
+}
+
 def parse_any_date(date_str: str) -> tuple[datetime | None, str | None]:
     """
     Parses date_str in multiple common Indian/global date formats.
@@ -30,7 +37,7 @@ def parse_any_date(date_str: str) -> tuple[datetime | None, str | None]:
     date_str = date_str.strip()
     
     try:
-        # 1. YYYY-MM-DD
+        # 1. YYYY-MM-DD or YYYY/MM/DD
         match_iso = re.search(r'(\d{4})[/\.-](\d{1,2})[/\.-](\d{1,2})', date_str)
         if match_iso:
             y, m, d = int(match_iso.group(1)), int(match_iso.group(2)), int(match_iso.group(3))
@@ -38,28 +45,43 @@ def parse_any_date(date_str: str) -> tuple[datetime | None, str | None]:
                 dt = datetime(y, m, d)
                 return dt, dt.strftime("%Y-%m-%d")
 
-        # 2. DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
-        match_dmY = re.search(r'(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})', date_str)
+        # 2. DD/MM/YYYY or DD-MM-YYYY or DD/MM/YY or DD-MM-YY
+        match_dmY = re.search(r'(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{2,4})', date_str)
         if match_dmY:
             d, m, y = int(match_dmY.group(1)), int(match_dmY.group(2)), int(match_dmY.group(3))
+            if y < 100:
+                y += 2000
             if 1 <= m <= 12 and 1 <= d <= 31:
                 dt = datetime(y, m, d)
                 return dt, dt.strftime("%Y-%m-%d")
 
-        # 3. MM/YY or MM/YYYY
+        # 3. Month Name (e.g. 15 JUL 2026 or 15-AUG-25 or JUL 2026)
+        match_text = re.search(r'(\d{1,2})?[\s/.-]*([a-zA-Z]{3,9})[\s/.-]*(\d{2,4})', date_str)
+        if match_text:
+            d_str, mon_str, y_str = match_text.group(1), match_text.group(2).lower(), match_text.group(3)
+            mon = MONTH_MAP.get(mon_str)
+            if mon:
+                y = int(y_str)
+                if y < 100:
+                    y += 2000
+                d = int(d_str) if d_str else 28
+                if 1 <= d <= 31:
+                    dt = datetime(y, mon, d)
+                    return dt, dt.strftime("%Y-%m-%d")
+
+        # 4. MM/YY or MM/YYYY (e.g. 07/26 or 07/2026)
         match_my = re.search(r'(\d{1,2})[/\.-](\d{2,4})', date_str)
         if match_my:
             m, y = int(match_my.group(1)), int(match_my.group(2))
             if y < 100:
                 y += 2000
             if 1 <= m <= 12:
-                # Default to end of month for expiry date estimation
                 dt = datetime(y, m, 28)
                 return dt, dt.strftime("%Y-%m-%d")
 
-        # 4. Fallback: Fuzzy parse with dateutil if installed
+        # 5. Fallback: Fuzzy parse with dateutil if installed
         if date_parser:
-            dt = date_parser.parse(date_str, fuzzy=True)
+            dt = date_parser.parse(date_str, fuzzy=True, dayfirst=True)
             return dt, dt.strftime("%Y-%m-%d")
             
         return None, date_str
@@ -133,12 +155,13 @@ async def extract_ocr(
 Analyze this product packaging image carefully and extract all product details.
 
 IMPORTANT DATE EXTRACTION RULES:
-1. "mfg_date": Look for "MFG DATE", "PKD", "PACKED ON", or "MANUFACTURED DATE". Format as YYYY-MM-DD (e.g. "2026-01-15").
-2. "expiry_date": Look for "EXP DATE", "EXPIRY DATE", "USE BY", "BEST BEFORE".
+1. "mfg_date": Look for "MFG DATE", "PKD", "PACKED ON", "MANUFACTURED DATE", "MFG", "B.No/PKD". Format as YYYY-MM-DD (e.g. "2026-01-15").
+2. "expiry_date": Look for "EXP DATE", "EXPIRY DATE", "USE BY", "BEST BEFORE", "EXP", "BEST BEFORE X MONTHS FROM PACKING/MFG".
    - If an explicit Expiry/Use By Date is printed, return it formatted as YYYY-MM-DD.
    - If the label says "Best before X months from MFG / PKD", calculate the actual expiry date by adding X months to mfg_date (e.g. Mfg 2026-01-15 + 6 months = 2026-07-15).
-   - If only Month/Year is printed (e.g. "EXP 07/26"), format it as YYYY-MM-DD (e.g. "2026-07-31").
-   - Do NOT confuse Mfg Date with Expiry Date! Ensure expiry_date is AFTER mfg_date.
+   - If only Month/Year is printed (e.g. "EXP 07/26" or "07/2026"), format it as YYYY-MM-DD (e.g. "2026-07-31").
+   - Do NOT leave expiry_date or mfg_date null if ANY date or relative duration is printed on the package!
+   - Ensure expiry_date is AFTER mfg_date.
 
 Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
 {
