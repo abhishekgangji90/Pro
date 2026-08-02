@@ -152,11 +152,12 @@ async def extract_ocr(
         )
         
         prompt = """You are an expert OCR product scanner for retail products and packaging.
-Analyze this product packaging image carefully and extract all product details.
+Analyze this product packaging image carefully and extract all product details including Barcode number if visible.
 
-IMPORTANT DATE EXTRACTION RULES:
-1. "mfg_date": Look for "MFG DATE", "PKD", "PACKED ON", "MANUFACTURED DATE", "MFG", "B.No/PKD". Format as YYYY-MM-DD (e.g. "2026-01-15").
-2. "expiry_date": Look for "EXP DATE", "EXPIRY DATE", "USE BY", "BEST BEFORE", "EXP", "BEST BEFORE X MONTHS FROM PACKING/MFG".
+IMPORTANT EXTRACTION RULES:
+1. "barcode": Read the barcode digits/number printed on or directly below any barcode lines (e.g. "8901030777123" or null if no barcode is visible).
+2. "mfg_date": Look for "MFG DATE", "PKD", "PACKED ON", "MANUFACTURED DATE", "MFG", "B.No/PKD". Format as YYYY-MM-DD (e.g. "2026-01-15").
+3. "expiry_date": Look for "EXP DATE", "EXPIRY DATE", "USE BY", "BEST BEFORE", "EXP", "BEST BEFORE X MONTHS FROM PACKING/MFG".
    - If an explicit Expiry/Use By Date is printed, return it formatted as YYYY-MM-DD.
    - If the label says "Best before X months from MFG / PKD", calculate the actual expiry date by adding X months to mfg_date (e.g. Mfg 2026-01-15 + 6 months = 2026-07-15).
    - If only Month/Year is printed (e.g. "EXP 07/26" or "07/2026"), format it as YYYY-MM-DD (e.g. "2026-07-31").
@@ -166,6 +167,7 @@ IMPORTANT DATE EXTRACTION RULES:
 Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
 {
   "product_name": "Full Product Name with weight/brand (string or null)",
+  "barcode": "Numeric barcode digits or string or null",
   "batch_number": "Batch / Lot / B.No (string or null)",
   "mrp": 123.45 (numeric MRP/Price in Rupees as float or null),
   "mfg_date": "YYYY-MM-DD or null",
@@ -196,6 +198,12 @@ Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
         data = {}
 
     product_name = data.get("product_name")
+    barcode = data.get("barcode")
+    if isinstance(barcode, str):
+        barcode = barcode.strip()
+    else:
+        barcode = None
+
     batch_number = data.get("batch_number")
     mrp = data.get("mrp")
     if mrp is not None:
@@ -216,20 +224,70 @@ Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
     # Calculate days remaining and category
     days_remaining, category = calculate_expiry(expiry_date)
 
-    # Save to database
+    # Search inventory database for matching product by barcode or name
     db = get_database()
+    products_col = db["products"]
+    matched_product = None
+
+    if barcode:
+        prod = await products_col.find_one({
+            "store_id": current_user.store_id,
+            "barcode": barcode
+        })
+        if not prod and len(barcode) >= 4:
+            prod = await products_col.find_one({
+                "store_id": current_user.store_id,
+                "barcode": {"$regex": re.escape(barcode), "$options": "i"}
+            })
+        if prod:
+            matched_product = {
+                "id": str(prod["_id"]),
+                "name": prod.get("name"),
+                "category": prod.get("category"),
+                "sku": prod.get("sku"),
+                "barcode": prod.get("barcode"),
+                "selling_price": float(prod.get("selling_price", 0.0)),
+                "purchase_price": float(prod.get("purchase_price", 0.0)),
+                "quantity": int(prod.get("quantity", 0)),
+                "unit": prod.get("unit", "Pcs"),
+                "shelf_location": prod.get("shelf_location", "Shelf A"),
+            }
+
+    if not matched_product and product_name and len(product_name.strip()) >= 3:
+        clean_name = product_name.strip()
+        prod = await products_col.find_one({
+            "store_id": current_user.store_id,
+            "name": {"$regex": re.escape(clean_name), "$options": "i"}
+        })
+        if prod:
+            matched_product = {
+                "id": str(prod["_id"]),
+                "name": prod.get("name"),
+                "category": prod.get("category"),
+                "sku": prod.get("sku"),
+                "barcode": prod.get("barcode"),
+                "selling_price": float(prod.get("selling_price", 0.0)),
+                "purchase_price": float(prod.get("purchase_price", 0.0)),
+                "quantity": int(prod.get("quantity", 0)),
+                "unit": prod.get("unit", "Pcs"),
+                "shelf_location": prod.get("shelf_location", "Shelf A"),
+            }
+
+    # Save to database
     col = db["ocr_results"]
     
     now = datetime.utcnow().isoformat()
     doc = {
         "store_id": current_user.store_id,
         "product_name": product_name or "Scanned Item",
+        "barcode": barcode,
         "batch_number": batch_number,
         "mrp": mrp,
         "mfg_date": mfg_date,
         "expiry_date": expiry_date,
         "days_remaining": days_remaining,
         "category": category,
+        "matched_product": matched_product,
         "created_at": now
     }
     

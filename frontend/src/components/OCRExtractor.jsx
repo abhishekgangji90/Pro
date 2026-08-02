@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, RefreshCw, AlertTriangle, ShieldCheck, FileText, ScanText, Clock, PackageCheck } from 'lucide-react';
+import { Camera, RefreshCw, AlertTriangle, ShieldCheck, FileText, ScanText, Clock, PackageCheck, Barcode, Database, CheckCircle2 } from 'lucide-react';
 import { extractOCRImage, getOCRHistory } from '../services/api';
 
 export default function OCRExtractor() {
@@ -48,11 +48,11 @@ export default function OCRExtractor() {
   const getCategoryStyles = (category) => {
     switch (category) {
       case 'Safe':
-        return 'bg-emerald-950/40 border-emerald-800 text-emerald-400';
+        return 'bg-emerald-950/40 border-emerald-800/80 text-emerald-400';
       case 'Near Expiry':
-        return 'bg-yellow-950/40 border-yellow-800 text-yellow-400';
+        return 'bg-yellow-950/40 border-yellow-800/80 text-yellow-400';
       case 'Expired':
-        return 'bg-red-950/40 border-red-800 text-red-400';
+        return 'bg-red-950/40 border-red-800/80 text-red-400';
       default:
         return 'bg-slate-900 border-slate-700 text-slate-300';
     }
@@ -73,9 +73,9 @@ export default function OCRExtractor() {
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
             <ScanText className="w-6 h-6 text-kirana-400" />
-            OCR Product Scanner
+            OCR Product Scanner & Barcode Lookup
           </h2>
-          <p className="text-sm text-slate-400 mt-1">Extract dates and MRP automatically using AI</p>
+          <p className="text-sm text-slate-400 mt-1">Extract dates, read barcodes & instantly fetch store inventory details</p>
         </div>
         
         <div>
@@ -90,10 +90,10 @@ export default function OCRExtractor() {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={analyzing}
-            className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-kirana-600 to-emerald-500 hover:from-kirana-500 hover:to-emerald-400 text-white rounded-xl text-sm font-bold shadow-lg disabled:opacity-50 transition-all w-full sm:w-auto justify-center"
+            className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-kirana-600 to-emerald-500 hover:from-kirana-500 hover:to-emerald-400 text-white rounded-xl text-sm font-bold shadow-lg disabled:opacity-50 transition-all w-full sm:w-auto justify-center cursor-pointer"
           >
             {analyzing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
-            <span>{analyzing ? 'Extracting Data...' : 'Scan Label'}</span>
+            <span>{analyzing ? 'Scanning & Reading...' : 'Scan Product / Label'}</span>
           </button>
         </div>
       </div>
@@ -113,7 +113,7 @@ export default function OCRExtractor() {
         <div className="text-center py-10 bg-slate-900/30 rounded-xl border border-dashed border-slate-700">
           <ScanText className="w-12 h-12 text-slate-600 mx-auto mb-3" />
           <h3 className="text-slate-300 font-medium">No OCR Scans Yet</h3>
-          <p className="text-sm text-slate-500 mt-1">Scan a product label with MRP and Expiry Date.</p>
+          <p className="text-sm text-slate-500 mt-1">Scan a product label or barcode to auto-fetch inventory details.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -126,7 +126,7 @@ export default function OCRExtractor() {
                     <span className="font-bold text-sm uppercase tracking-wider">{item.category}</span>
                   </div>
                   {item.days_remaining !== null && (
-                    <span className="text-xs font-bold px-2 py-1 bg-black/20 rounded-lg">
+                    <span className="text-xs font-bold px-2 py-1 bg-black/30 rounded-lg">
                       {item.days_remaining} Days Left
                     </span>
                   )}
@@ -135,12 +135,43 @@ export default function OCRExtractor() {
                 <h4 className="text-lg font-bold text-white mb-2 line-clamp-1">{item.product_name || 'Unknown Product'}</h4>
                 
                 <div className="space-y-1.5 text-sm text-slate-300">
+                  <div className="flex justify-between items-center">
+                    <span className="flex items-center gap-1.5 text-slate-400">
+                      <Barcode className="w-3.5 h-3.5 text-slate-400" />
+                      Barcode:
+                    </span> 
+                    <span className="font-mono text-xs font-bold text-white bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700">
+                      {item.barcode || 'Not Detected'}
+                    </span>
+                  </div>
                   <div className="flex justify-between"><span>MRP:</span> <span className="font-medium text-white">{item.mrp ? `₹${item.mrp}` : 'N/A'}</span></div>
                   <div className="flex justify-between"><span>Batch:</span> <span className="font-medium text-white">{item.batch_number || 'N/A'}</span></div>
                   <div className="flex justify-between"><span>Mfg Date:</span> <span className="font-medium text-white">{item.mfg_date || 'Not Specified'}</span></div>
                   <div className="flex justify-between"><span>Expiry Date:</span> <span className="font-medium text-white">{item.expiry_date || 'Not Specified'}</span></div>
                 </div>
+
+                {/* Inventory Database Match Badge & Details */}
+                {item.matched_product ? (
+                  <div className="mt-4 p-3 rounded-xl bg-emerald-950/60 border border-emerald-700/60">
+                    <div className="flex items-center gap-1.5 text-emerald-400 text-xs font-bold mb-2">
+                      <Database className="w-3.5 h-3.5" />
+                      <span>Matched in Store Inventory</span>
+                    </div>
+                    <div className="space-y-1 text-xs text-slate-300">
+                      <div className="flex justify-between"><span>Inventory Stock:</span> <span className="font-bold text-emerald-300">{item.matched_product.quantity} {item.matched_product.unit || 'Pcs'}</span></div>
+                      <div className="flex justify-between"><span>Selling Price:</span> <span className="font-bold text-white">₹{item.matched_product.selling_price}</span></div>
+                      <div className="flex justify-between"><span>Category & SKU:</span> <span className="font-medium text-slate-300">{item.matched_product.category} ({item.matched_product.sku})</span></div>
+                      <div className="flex justify-between"><span>Location:</span> <span className="font-medium text-slate-300">{item.matched_product.shelf_location}</span></div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 text-[11px] text-slate-400 flex items-center gap-1 italic">
+                    <AlertTriangle className="w-3 h-3 text-slate-500 shrink-0" />
+                    <span>No barcode match found in store inventory</span>
+                  </div>
+                )}
               </div>
+
               <div className="mt-4 pt-3 border-t border-black/10 text-[10px] text-right opacity-70">
                 {new Date(item.created_at).toLocaleString()}
               </div>

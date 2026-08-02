@@ -160,12 +160,14 @@ class OCRExtractResponse(BaseModel):
     id: str
     store_id: str
     product_name: Optional[str] = None
+    barcode: Optional[str] = None
     batch_number: Optional[str] = None
     mrp: Optional[float] = None
     mfg_date: Optional[str] = None
     expiry_date: Optional[str] = None
     days_remaining: Optional[int] = None
     category: str = Field(..., description="Safe, Near Expiry, or Expired")
+    matched_product: Optional[dict] = None
     created_at: str
 
 # Notification Schemas
