@@ -155,11 +155,17 @@ export default function OCRExtractor() {
                   <div className="mt-4 p-3 rounded-xl bg-emerald-950/60 border border-emerald-700/60">
                     <div className="flex items-center gap-1.5 text-emerald-400 text-xs font-bold mb-2">
                       <Database className="w-3.5 h-3.5" />
-                      <span>Matched in Store Inventory</span>
+                      <span>Matched in Inventory ({item.matched_product.name})</span>
                     </div>
                     <div className="space-y-1 text-xs text-slate-300">
                       <div className="flex justify-between"><span>Inventory Stock:</span> <span className="font-bold text-emerald-300">{item.matched_product.quantity} {item.matched_product.unit || 'Pcs'}</span></div>
                       <div className="flex justify-between"><span>Selling Price:</span> <span className="font-bold text-white">₹{item.matched_product.selling_price}</span></div>
+                      {item.matched_product.mfg_date && (
+                        <div className="flex justify-between"><span>DB Mfg Date:</span> <span className="font-medium text-emerald-200">{item.matched_product.mfg_date}</span></div>
+                      )}
+                      {item.matched_product.expiry_date && (
+                        <div className="flex justify-between"><span>DB Expiry Date:</span> <span className="font-medium text-emerald-200">{item.matched_product.expiry_date}</span></div>
+                      )}
                       <div className="flex justify-between"><span>Category & SKU:</span> <span className="font-medium text-slate-300">{item.matched_product.category} ({item.matched_product.sku})</span></div>
                       <div className="flex justify-between"><span>Location:</span> <span className="font-medium text-slate-300">{item.matched_product.shelf_location}</span></div>
                     </div>

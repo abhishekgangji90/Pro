@@ -127,6 +127,28 @@ def compress_image_bytes(image_bytes: bytes, max_dim: int = 1280) -> tuple[bytes
     except Exception:
         return image_bytes, "image/jpeg"
 
+def build_matched_product_dict(prod: dict) -> dict:
+    raw_mfg = prod.get("mfg_date")
+    raw_exp = prod.get("expiry_date")
+    _, fmt_mfg = parse_any_date(raw_mfg) if raw_mfg else (None, None)
+    _, fmt_exp = parse_any_date(raw_exp) if raw_exp else (None, None)
+    
+    return {
+        "id": str(prod["_id"]),
+        "name": prod.get("name"),
+        "category": prod.get("category"),
+        "sku": prod.get("sku"),
+        "barcode": prod.get("barcode"),
+        "batch_number": prod.get("batch_number"),
+        "mfg_date": fmt_mfg or raw_mfg,
+        "expiry_date": fmt_exp or raw_exp,
+        "selling_price": float(prod.get("selling_price", 0.0)),
+        "purchase_price": float(prod.get("purchase_price", 0.0)),
+        "quantity": int(prod.get("quantity", 0)),
+        "unit": prod.get("unit", "Pcs"),
+        "shelf_location": prod.get("shelf_location", "Shelf A"),
+    }
+
 @router.post("/extract", response_model=OCRExtractResponse, status_code=status.HTTP_201_CREATED)
 async def extract_ocr(
     file: UploadFile = File(...),
@@ -221,9 +243,6 @@ Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
     mfg_date = formatted_mfg or raw_mfg
     expiry_date = formatted_exp or raw_exp
 
-    # Calculate days remaining and category
-    days_remaining, category = calculate_expiry(expiry_date)
-
     # Search inventory database for matching product by barcode or name
     db = get_database()
     products_col = db["products"]
@@ -240,18 +259,7 @@ Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
                 "barcode": {"$regex": re.escape(barcode), "$options": "i"}
             })
         if prod:
-            matched_product = {
-                "id": str(prod["_id"]),
-                "name": prod.get("name"),
-                "category": prod.get("category"),
-                "sku": prod.get("sku"),
-                "barcode": prod.get("barcode"),
-                "selling_price": float(prod.get("selling_price", 0.0)),
-                "purchase_price": float(prod.get("purchase_price", 0.0)),
-                "quantity": int(prod.get("quantity", 0)),
-                "unit": prod.get("unit", "Pcs"),
-                "shelf_location": prod.get("shelf_location", "Shelf A"),
-            }
+            matched_product = build_matched_product_dict(prod)
 
     if not matched_product and product_name and len(product_name.strip()) >= 3:
         clean_name = product_name.strip()
@@ -260,18 +268,25 @@ Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
             "name": {"$regex": re.escape(clean_name), "$options": "i"}
         })
         if prod:
-            matched_product = {
-                "id": str(prod["_id"]),
-                "name": prod.get("name"),
-                "category": prod.get("category"),
-                "sku": prod.get("sku"),
-                "barcode": prod.get("barcode"),
-                "selling_price": float(prod.get("selling_price", 0.0)),
-                "purchase_price": float(prod.get("purchase_price", 0.0)),
-                "quantity": int(prod.get("quantity", 0)),
-                "unit": prod.get("unit", "Pcs"),
-                "shelf_location": prod.get("shelf_location", "Shelf A"),
-            }
+            matched_product = build_matched_product_dict(prod)
+
+    # Use stored database details as fallbacks if OCR extraction missed specific fields
+    if matched_product:
+        if not product_name or product_name == "Scanned Item":
+            product_name = matched_product.get("name")
+        if not barcode and matched_product.get("barcode"):
+            barcode = matched_product.get("barcode")
+        if not batch_number and matched_product.get("batch_number"):
+            batch_number = matched_product.get("batch_number")
+        if not mfg_date and matched_product.get("mfg_date"):
+            mfg_date = matched_product.get("mfg_date")
+        if not expiry_date and matched_product.get("expiry_date"):
+            expiry_date = matched_product.get("expiry_date")
+        if mrp is None and matched_product.get("selling_price"):
+            mrp = matched_product.get("selling_price")
+
+    # Calculate days remaining and category using merged/fallback expiry date
+    days_remaining, category = calculate_expiry(expiry_date)
 
     # Save to database
     col = db["ocr_results"]
