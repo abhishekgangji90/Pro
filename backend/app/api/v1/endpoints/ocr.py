@@ -4,7 +4,11 @@ import json
 import io
 import re
 from PIL import Image
-from dateutil import parser as date_parser
+try:
+    from dateutil import parser as date_parser
+except ImportError:
+    date_parser = None
+
 from google import genai
 from google.genai import types
 
@@ -53,9 +57,12 @@ def parse_any_date(date_str: str) -> tuple[datetime | None, str | None]:
                 dt = datetime(y, m, 28)
                 return dt, dt.strftime("%Y-%m-%d")
 
-        # 4. Fallback: Fuzzy parse with dateutil
-        dt = date_parser.parse(date_str, fuzzy=True)
-        return dt, dt.strftime("%Y-%m-%d")
+        # 4. Fallback: Fuzzy parse with dateutil if installed
+        if date_parser:
+            dt = date_parser.parse(date_str, fuzzy=True)
+            return dt, dt.strftime("%Y-%m-%d")
+            
+        return None, date_str
     except Exception:
         return None, date_str
 
