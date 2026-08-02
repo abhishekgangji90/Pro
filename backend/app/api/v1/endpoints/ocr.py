@@ -3,6 +3,7 @@ from datetime import datetime
 import json
 import io
 import re
+from PIL import Image
 from google import genai
 from google.genai import types
 
@@ -11,17 +12,7 @@ from app.core.database import get_database
 from app.models.schemas import UserResponse, OCRExtractResponse
 from app.api.v1.endpoints.auth import get_current_user
 
-# Lazy load easyocr to avoid slow startup if not used
-reader = None
-
 router = APIRouter()
-
-def get_ocr_reader():
-    global reader
-    if reader is None:
-        import easyocr
-        reader = easyocr.Reader(['en'])
-    return reader
 
 def calculate_expiry(expiry_date_str: str):
     """
@@ -31,9 +22,7 @@ def calculate_expiry(expiry_date_str: str):
     if not expiry_date_str:
         return None, "Safe"
         
-    # Attempt to parse YYYY-MM-DD
     try:
-        # Just simple regex for YYYY-MM-DD
         match = re.search(r'\d{4}-\d{2}-\d{2}', expiry_date_str)
         if match:
             exp_date = datetime.strptime(match.group(), "%Y-%m-%d")
@@ -50,6 +39,25 @@ def calculate_expiry(expiry_date_str: str):
         
     return None, "Safe"
 
+def compress_image_bytes(image_bytes: bytes, max_dim: int = 1280) -> tuple[bytes, str]:
+    """
+    Resizes large images to reduce RAM usage and API payload size (< 20MB RAM).
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+            
+        width, height = img.size
+        if width > max_dim or height > max_dim:
+            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+            
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=85)
+        return output.getvalue(), "image/jpeg"
+    except Exception:
+        return image_bytes, "image/jpeg"
+
 @router.post("/extract", response_model=OCRExtractResponse, status_code=status.HTTP_201_CREATED)
 async def extract_ocr(
     file: UploadFile = File(...),
@@ -58,26 +66,24 @@ async def extract_ocr(
     if not settings.GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured on server")
         
-    image_bytes = await file.read()
-    if not image_bytes:
+    raw_bytes = await file.read()
+    if not raw_bytes:
         raise HTTPException(status_code=400, detail="Uploaded image file is empty.")
         
-    mime_type = file.content_type or "image/jpeg"
-    if mime_type == "application/octet-stream" or not mime_type.startswith("image/"):
-        mime_type = "image/jpeg"
+    # Compress image to keep memory consumption under 20MB
+    image_bytes, mime_type = compress_image_bytes(raw_bytes)
 
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
     data = {}
 
-    # Method 1: Direct Gemini Vision AI Extraction (Primary & Highly Accurate)
     try:
         image_part = types.Part.from_bytes(
             data=image_bytes,
             mime_type=mime_type
         )
         
-        prompt = """You are an expert OCR product scanner and data extractor.
-Analyze this product packaging image directly and extract text details.
+        prompt = """You are an expert OCR product scanner and data extractor for retail stores.
+Analyze this product packaging image directly and extract label details.
 
 Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
 {
@@ -106,40 +112,7 @@ Return ONLY a valid raw JSON object with no markdown code blocks or extra text:
             if json_match:
                 data = json.loads(json_match.group(0))
     except Exception as vision_err:
-        print(f"Gemini Vision error: {vision_err}")
-
-    # Method 2: EasyOCR Fallback if Gemini Vision direct image read did not return valid dict
-    if not data or not isinstance(data, dict) or not any(data.values()):
-        try:
-            r = get_ocr_reader()
-            ocr_results = r.readtext(image_bytes, detail=0)
-            raw_text = "\n".join(ocr_results)
-            
-            if raw_text.strip():
-                text_prompt = f"""
-You are an expert data extractor. Extract details from this OCR text and return ONLY a valid JSON object.
-
-Extract:
-- "product_name" (string or null)
-- "batch_number" (string or null)
-- "mrp" (float or null)
-- "mfg_date" (string as YYYY-MM-DD or null)
-- "expiry_date" (string as YYYY-MM-DD or null)
-
-Raw OCR Text:
-{raw_text}
-"""
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=[text_prompt]
-                )
-                if response and response.text:
-                    text = response.text.strip()
-                    json_match = re.search(r'\{.*\}', text, re.DOTALL)
-                    if json_match:
-                        data = json.loads(json_match.group(0))
-        except Exception as ocr_err:
-            print(f"EasyOCR fallback error: {ocr_err}")
+        print(f"Gemini Vision extraction error: {vision_err}")
 
     if not isinstance(data, dict):
         data = {}
